@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Node / Vue
+node_modules/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+.vite/
+coverage/
+
+# IDE
+.idea/
+.vscode/
+
