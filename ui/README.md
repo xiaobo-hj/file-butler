@@ -1,4 +1,4 @@
-# Client
+# UI
 
 Vue frontend skeleton for File Butler.
 

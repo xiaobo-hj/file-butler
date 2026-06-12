@@ -13,10 +13,10 @@
 ```text
 file-butler/
   server/                  # Python backend managed by uv
-  client/                  # Vue frontend
+  ui/                      # Vue frontend
 ```
 
 ## Directories
 
 - `server`: backend API, Agent orchestration, file operations, metadata, and tests.
-- `client`: frontend pages, components, stores, services, assets, and tests.
+- `ui`: frontend pages, components, stores, services, assets, and tests.

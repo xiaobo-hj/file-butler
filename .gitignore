@@ -17,6 +17,8 @@ venv/
 dist/
 build/
 *.egg-info/
+server/.uv-cache/
+server/data/
 
 # Node / Vue
 node_modules/
@@ -29,4 +31,3 @@ coverage/
 # IDE
 .idea/
 .vscode/
-
