@@ -3,11 +3,13 @@ import { computed, onMounted, ref } from 'vue'
 import {
   AppstoreOutlined,
   CloudUploadOutlined,
+  FileOutlined,
   FilePdfOutlined,
   FileSearchOutlined,
   FolderOpenOutlined,
   InboxOutlined,
   MessageOutlined,
+  SearchOutlined,
   UploadOutlined,
 } from '@ant-design/icons-vue'
 
@@ -15,9 +17,26 @@ const activePage = ref('overview')
 const dashboard = ref(null)
 const uploadPage = ref({ queue: [], hint: '' })
 const suggestionsPage = ref({ suggestions: [], selectedSuggestion: null, summary: null })
+const libraryPage = ref({
+  summary: {
+    totalFiles: '0',
+    organizedFiles: '0',
+    indexedFiles: '0',
+    folders: '0',
+    totalSize: '0 KB',
+  },
+  files: [],
+  filters: { folders: [], statuses: [] },
+})
 const isLoading = ref(false)
+const isUploading = ref(false)
+const isDeciding = ref(false)
 const loadError = ref('')
+const decisionNotice = ref('')
 const fileInput = ref(null)
+const librarySearch = ref('')
+const libraryStatusFilter = ref('all')
+const libraryFolderFilter = ref('all')
 
 const navItems = [
   { key: 'overview', label: '总览', icon: AppstoreOutlined },
@@ -66,6 +85,31 @@ const overviewModel = computed(
     },
 )
 
+const selectedSuggestionIsPending = computed(
+  () => suggestionsPage.value.selectedSuggestion?.rawStatus === 'pending',
+)
+
+const hasPendingSuggestions = computed(
+  () => suggestionsPage.value.suggestions.some((item) => item.rawStatus === 'pending'),
+)
+
+const filteredLibraryFiles = computed(() => {
+  const query = librarySearch.value.trim().toLowerCase()
+  return libraryPage.value.files.filter((file) => {
+    const matchesQuery =
+      !query ||
+      [file.fileName, file.folder, file.currentPath, file.summary, ...file.tags]
+        .join(' ')
+        .toLowerCase()
+        .includes(query)
+    const matchesStatus =
+      libraryStatusFilter.value === 'all' || file.rawStatus === libraryStatusFilter.value
+    const matchesFolder =
+      libraryFolderFilter.value === 'all' || file.folder === libraryFolderFilter.value
+    return matchesQuery && matchesStatus && matchesFolder
+  })
+})
+
 async function loadCurrentPage() {
   isLoading.value = true
   loadError.value = ''
@@ -77,6 +121,8 @@ async function loadCurrentPage() {
       uploadPage.value = await fetchJson('/api/uploads')
     } else if (activePage.value === 'suggestions') {
       suggestionsPage.value = await fetchJson('/api/suggestions')
+    } else if (activePage.value === 'library') {
+      libraryPage.value = await fetchJson('/api/library')
     }
   } catch (error) {
     loadError.value = '后端接口暂不可用，请先启动后端服务。'
@@ -95,6 +141,7 @@ async function fetchJson(url, options) {
 
 function switchPage(pageKey) {
   activePage.value = pageKey
+  decisionNotice.value = ''
   loadCurrentPage()
 }
 
@@ -105,20 +152,31 @@ function openFilePicker() {
 async function registerSelectedFiles(event) {
   const files = Array.from(event.target.files ?? [])
   event.target.value = ''
-
-  for (const file of files) {
-    await fetchJson('/api/uploads/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        file_name: file.name,
-        size_bytes: file.size,
-        mime_type: file.type || null,
-      }),
-    })
+  if (!files.length) {
+    return
   }
 
-  await loadCurrentPage()
+  isUploading.value = true
+  loadError.value = ''
+  try {
+    for (const file of files) {
+      await fetchJson('/api/uploads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          file_name: file.name,
+          content_base64: await fileToBase64(file),
+          mime_type: file.type || null,
+        }),
+      })
+    }
+    activePage.value = 'suggestions'
+    await loadCurrentPage()
+  } catch (error) {
+    loadError.value = '上传或生成建议失败，请检查后端服务和模型配置。'
+  } finally {
+    isUploading.value = false
+  }
 }
 
 async function decideSuggestion(decision) {
@@ -126,13 +184,73 @@ async function decideSuggestion(decision) {
   if (!selected) {
     return
   }
+  if (decision === 'approve' && selected.rawStatus !== 'pending') {
+    decisionNotice.value = '这条建议已经处理过了。'
+    return
+  }
 
-  await fetchJson(`/api/suggestions/${selected.id}/decision`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ decision }),
-  })
-  await loadCurrentPage()
+  isDeciding.value = true
+  loadError.value = ''
+  decisionNotice.value = ''
+  try {
+    await fetchJson(`/api/suggestions/${selected.id}/decision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision }),
+    })
+    decisionNotice.value = decision === 'approve' ? '已确认并执行整理操作。' : '已更新建议状态。'
+    await loadCurrentPage()
+  } catch (error) {
+    loadError.value = '处理建议失败，请检查后端日志后重试。'
+  } finally {
+    isDeciding.value = false
+  }
+}
+
+async function approveAllSuggestions() {
+  while (suggestionsPage.value.suggestions.some((item) => item.rawStatus === 'pending')) {
+    const next = suggestionsPage.value.suggestions.find((item) => item.rawStatus === 'pending')
+    if (!next) {
+      return
+    }
+    await fetchJson(`/api/suggestions/${next.id}/decision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'approve' }),
+    })
+    await loadCurrentPage()
+  }
+}
+
+async function fileToBase64(file) {
+  const buffer = await file.arrayBuffer()
+  const bytes = new Uint8Array(buffer)
+  const chunkSize = 0x8000
+  let binary = ''
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize))
+  }
+  return btoa(binary)
+}
+
+function libraryStatusColor(status) {
+  if (status === 'indexed') {
+    return 'success'
+  }
+  if (status === 'organized') {
+    return 'processing'
+  }
+  if (status === 'error') {
+    return 'error'
+  }
+  return 'default'
+}
+
+function formatLibraryUpdatedAt(value) {
+  if (!value) {
+    return '-'
+  }
+  return value.replace('T', ' ').replace('Z', '')
 }
 
 onMounted(loadCurrentPage)
@@ -188,7 +306,8 @@ onMounted(loadCurrentPage)
               v-if="activePage === 'suggestions'"
               type="primary"
               size="large"
-              :disabled="!suggestionsPage.suggestions.length"
+              :disabled="!hasPendingSuggestions"
+              @click="approveAllSuggestions"
             >
               全部同意
             </a-button>
@@ -207,8 +326,15 @@ onMounted(loadCurrentPage)
           type="warning"
           show-icon
         />
+        <a-alert
+          v-if="decisionNotice"
+          class="offline-alert"
+          :message="decisionNotice"
+          type="success"
+          show-icon
+        />
 
-        <a-spin :spinning="isLoading">
+        <a-spin :spinning="isLoading || isUploading || isDeciding">
           <section v-if="activePage === 'overview'" class="page-section">
             <section class="metric-grid">
               <a-card
@@ -281,9 +407,9 @@ onMounted(loadCurrentPage)
             <a-card class="upload-drop-card">
               <button class="upload-drop-zone" type="button" @click="openFilePicker">
                 <UploadOutlined />
-                <strong>把文件拖到这里</strong>
-                <span>Agent 会先分析并生成整理建议，不会直接修改文件</span>
-                <a-button type="primary">选择文件</a-button>
+                <strong>{{ isUploading ? '正在生成建议' : '选择文件上传' }}</strong>
+                <span>Agent 会保存副本、分析内容并生成整理建议</span>
+                <a-button type="primary" :loading="isUploading">选择文件</a-button>
               </button>
               <input
                 ref="fileInput"
@@ -350,7 +476,16 @@ onMounted(loadCurrentPage)
                 description="暂无可确认的整理建议"
               />
               <template v-else>
-                <div class="human-loop-banner">等待你确认：AI 只生成建议，不直接整理文件</div>
+                <div
+                  class="human-loop-banner"
+                  :class="{ completed: !selectedSuggestionIsPending }"
+                >
+                  {{
+                    selectedSuggestionIsPending
+                      ? '等待你确认：AI 只生成建议，不直接整理文件'
+                      : `已处理：${suggestionsPage.selectedSuggestion.status}`
+                  }}
+                </div>
                 <h3>{{ suggestionsPage.selectedSuggestion.fileName }}</h3>
                 <dl class="detail-fields">
                   <div>
@@ -416,10 +551,29 @@ onMounted(loadCurrentPage)
                 </section>
 
                 <div class="decision-actions">
-                  <a-button type="primary" @click="decideSuggestion('approve')">同意</a-button>
-                  <a-button>修改</a-button>
-                  <a-button danger @click="decideSuggestion('reject')">拒绝</a-button>
-                  <a-button type="text" @click="decideSuggestion('later')">稍后处理</a-button>
+                  <a-button
+                    type="primary"
+                    :disabled="!selectedSuggestionIsPending"
+                    :loading="isDeciding"
+                    @click="decideSuggestion('approve')"
+                  >
+                    同意
+                  </a-button>
+                  <a-button :disabled="!selectedSuggestionIsPending">修改</a-button>
+                  <a-button
+                    danger
+                    :disabled="!selectedSuggestionIsPending"
+                    @click="decideSuggestion('reject')"
+                  >
+                    拒绝
+                  </a-button>
+                  <a-button
+                    type="text"
+                    :disabled="!selectedSuggestionIsPending"
+                    @click="decideSuggestion('later')"
+                  >
+                    稍后处理
+                  </a-button>
                 </div>
               </template>
             </a-card>
@@ -455,10 +609,107 @@ onMounted(loadCurrentPage)
                   {{ suggestionsPage.selectedSuggestion.confidence }}
                 </strong>
                 <section class="confirm-warning">
-                  <strong>需确认后执行</strong>
-                  <span>包含移动目录、重命名和打标签</span>
+                  <strong>{{ selectedSuggestionIsPending ? '需确认后执行' : '已执行完成' }}</strong>
+                  <span>
+                    {{
+                      selectedSuggestionIsPending
+                        ? '包含移动目录、重命名和打标签'
+                        : '文件已按建议更新到当前路径'
+                    }}
+                  </span>
                 </section>
               </template>
+            </a-card>
+          </section>
+
+          <section v-else-if="activePage === 'library'" class="page-section library-page">
+            <section class="library-summary-grid">
+              <a-card class="library-summary-card">
+                <span>全部文件</span>
+                <strong>{{ libraryPage.summary.totalFiles }}</strong>
+              </a-card>
+              <a-card class="library-summary-card">
+                <span>已整理</span>
+                <strong>{{ libraryPage.summary.organizedFiles }}</strong>
+              </a-card>
+              <a-card class="library-summary-card">
+                <span>已索引</span>
+                <strong>{{ libraryPage.summary.indexedFiles }}</strong>
+              </a-card>
+              <a-card class="library-summary-card">
+                <span>总大小</span>
+                <strong>{{ libraryPage.summary.totalSize }}</strong>
+              </a-card>
+            </section>
+
+            <a-card class="library-panel">
+              <div class="library-toolbar">
+                <a-input
+                  v-model:value="librarySearch"
+                  class="library-search"
+                  placeholder="搜索文件名、路径、摘要或标签"
+                  allow-clear
+                >
+                  <template #prefix><SearchOutlined /></template>
+                </a-input>
+                <a-select v-model:value="libraryStatusFilter" class="library-filter">
+                  <a-select-option value="all">全部状态</a-select-option>
+                  <a-select-option
+                    v-for="status in libraryPage.filters.statuses"
+                    :key="status.value"
+                    :value="status.value"
+                  >
+                    {{ status.label }}
+                  </a-select-option>
+                </a-select>
+                <a-select v-model:value="libraryFolderFilter" class="library-filter">
+                  <a-select-option value="all">全部目录</a-select-option>
+                  <a-select-option
+                    v-for="folder in libraryPage.filters.folders"
+                    :key="folder"
+                    :value="folder"
+                  >
+                    {{ folder }}
+                  </a-select-option>
+                </a-select>
+              </div>
+
+              <a-empty v-if="!filteredLibraryFiles.length" description="暂无匹配文件" />
+              <div v-else class="library-file-list">
+                <article v-for="file in filteredLibraryFiles" :key="file.id" class="library-file-row">
+                  <div class="library-file-icon">
+                    <FilePdfOutlined v-if="file.fileType === 'PDF'" />
+                    <FileOutlined v-else />
+                    <span>{{ file.fileType }}</span>
+                  </div>
+                  <div class="library-file-main">
+                    <div class="library-file-title">
+                      <strong>{{ file.fileName }}</strong>
+                      <a-tag :color="libraryStatusColor(file.rawStatus)">{{ file.status }}</a-tag>
+                    </div>
+                    <span class="library-file-path">{{ file.folder }}</span>
+                    <p>{{ file.summary || file.currentPath }}</p>
+                    <div class="library-tag-row">
+                      <a-tag v-for="tag in file.tags" :key="tag" color="blue">{{ tag }}</a-tag>
+                      <span v-if="!file.tags.length" class="muted-text">暂无标签</span>
+                    </div>
+                  </div>
+                  <dl class="library-file-meta">
+                    <div>
+                      <dt>大小</dt>
+                      <dd>{{ file.sizeLabel }}</dd>
+                    </div>
+                    <div>
+                      <dt>根目录</dt>
+                      <dd>{{ file.storageRoot }}</dd>
+                    </div>
+                    <div>
+                      <dt>更新时间</dt>
+                      <dd>{{ formatLibraryUpdatedAt(file.updatedAt) }}</dd>
+                    </div>
+                  </dl>
+                </article>
+              </div>
             </a-card>
           </section>
 

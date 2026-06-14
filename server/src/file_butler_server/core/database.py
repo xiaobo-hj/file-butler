@@ -6,10 +6,13 @@ import os
 import sqlite3
 from pathlib import Path
 
+from file_butler_server.core.current_user import CURRENT_USER_ID
+
 
 SCHEMA_VERSION = 2
 DEFAULT_DATA_DIR = Path.home() / ".file-butler"
 DEFAULT_DATABASE_NAME = "file_butler.db"
+DEFAULT_STORAGE_ROOT_NAME = "FileButler 归档区"
 
 
 SCHEMA_SQL = """
@@ -413,8 +416,7 @@ SCHEMA_COMMENTS = (
 def default_database_path() -> Path:
     """Return the default local database path for a user deployment."""
 
-    data_dir = Path(os.environ.get("FILE_BUTLER_DATA_DIR", DEFAULT_DATA_DIR)).expanduser()
-    return data_dir / DEFAULT_DATABASE_NAME
+    return default_data_dir() / DEFAULT_DATABASE_NAME
 
 
 def connect_database(database_path: str | Path | None = None) -> sqlite3.Connection:
@@ -436,6 +438,8 @@ def initialize_database(database_path: str | Path | None = None) -> Path:
     with connect_database(path) as connection:
         connection.executescript(SCHEMA_SQL)
         _sync_schema_comments(connection)
+        if database_path is None:
+            _ensure_single_user_defaults(connection)
 
     return path
 
@@ -449,3 +453,34 @@ def _sync_schema_comments(connection: sqlite3.Connection) -> None:
         """,
         SCHEMA_COMMENTS,
     )
+
+
+def _ensure_single_user_defaults(connection: sqlite3.Connection) -> None:
+    storage_root = default_storage_root_path()
+    storage_root.mkdir(parents=True, exist_ok=True)
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO users (id, display_name)
+        VALUES (?, ?)
+        """,
+        (CURRENT_USER_ID, "本机用户"),
+    )
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO storage_roots (id, user_id, root_path, display_name)
+        VALUES (?, ?, ?, ?)
+        """,
+        ("root-default", CURRENT_USER_ID, str(storage_root), DEFAULT_STORAGE_ROOT_NAME),
+    )
+
+
+def default_data_dir() -> Path:
+    return Path(os.environ.get("FILE_BUTLER_DATA_DIR", DEFAULT_DATA_DIR)).expanduser()
+
+
+def default_upload_dir() -> Path:
+    return default_data_dir() / "uploads"
+
+
+def default_storage_root_path() -> Path:
+    return Path(os.environ.get("FILE_BUTLER_STORAGE_ROOT", default_data_dir() / "storage")).expanduser()

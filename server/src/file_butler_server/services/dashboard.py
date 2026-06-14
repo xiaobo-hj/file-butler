@@ -13,6 +13,8 @@ from file_butler_server.core.database import connect_database
 
 SUGGESTION_STATUS_LABELS = {
     "pending": "待确认",
+    "approved": "已确认",
+    "rejected": "已拒绝",
     "completed": "解析完成",
     "needs_input": "待补充",
 }

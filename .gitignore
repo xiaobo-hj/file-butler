@@ -5,6 +5,8 @@
 .env
 .env.*
 !.env.example
+.local-data/
+.uv-cache/
 
 # Python
 __pycache__/

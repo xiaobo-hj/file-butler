@@ -11,13 +11,24 @@ from pydantic import BaseModel, Field
 
 from file_butler_server.core.database import initialize_database
 from file_butler_server.services.dashboard import get_overview_dashboard
+from file_butler_server.services.library import get_library_page
 from file_butler_server.services.suggestions import decide_suggestion, get_suggestions_page
-from file_butler_server.services.uploads import get_upload_page, register_upload_metadata
+from file_butler_server.services.uploads import (
+    get_upload_page,
+    register_upload_metadata,
+    upload_and_analyze_file,
+)
 
 
 class UploadMetadataRequest(BaseModel):
     file_name: str = Field(min_length=1)
     size_bytes: int = Field(default=0, ge=0)
+    mime_type: str | None = None
+
+
+class UploadFileRequest(BaseModel):
+    file_name: str = Field(min_length=1)
+    content_base64: str = Field(min_length=1)
     mime_type: str | None = None
 
 
@@ -72,9 +83,26 @@ def register_upload(request: UploadMetadataRequest) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@app.post("/api/uploads")
+def upload_file(request: UploadFileRequest) -> dict[str, object]:
+    try:
+        return upload_and_analyze_file(
+            file_name=request.file_name,
+            content_base64=request.content_base64,
+            mime_type=request.mime_type,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @app.get("/api/suggestions")
 def suggestions_page() -> dict[str, object]:
     return get_suggestions_page()
+
+
+@app.get("/api/library")
+def library_page() -> dict[str, object]:
+    return get_library_page()
 
 
 @app.post("/api/suggestions/{suggestion_id}/decision")
