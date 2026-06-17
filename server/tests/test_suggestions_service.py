@@ -24,9 +24,12 @@ class SuggestionsServiceTest(unittest.TestCase):
 
     def test_decide_suggestion_updates_current_user_suggestion(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            database_path = Path(temp_dir) / "file_butler.db"
+            temp_path = Path(temp_dir)
+            database_path = temp_path / "file_butler.db"
             initialize_database(database_path)
-            self._insert_suggestion_rows(database_path)
+            source_file = temp_path / "合同.pdf"
+            source_file.write_text("合同内容", encoding="utf-8")
+            self._insert_suggestion_rows(database_path, source_path=source_file)
 
             result = decide_suggestion("suggestion-1", "approve", database_path)
 
@@ -39,9 +42,17 @@ class SuggestionsServiceTest(unittest.TestCase):
         self.assertEqual(result["status"], "approved")
         self.assertEqual(status, "approved")
 
-    def _insert_suggestion_rows(self, database_path: Path) -> None:
+    def _insert_suggestion_rows(self, database_path: Path, source_path: Path | None = None) -> None:
+        source = source_path or Path("/tmp/合同.pdf")
         with connect_database(database_path) as connection:
             connection.execute("INSERT INTO users (id, display_name) VALUES (?, ?)", ("1", "用户"))
+            connection.execute(
+                """
+                INSERT INTO storage_roots (id, user_id, root_path, display_name)
+                VALUES (?, ?, ?, ?)
+                """,
+                ("root-1", "1", str(database_path.parent / "storage"), "测试整理目录"),
+            )
             connection.execute(
                 "INSERT INTO folders (id, user_id, parent_id, name, path) VALUES (?, ?, ?, ?, ?)",
                 ("folder-1", "1", None, "合同", "家庭 / 合同"),
@@ -65,12 +76,12 @@ class SuggestionsServiceTest(unittest.TestCase):
                     "file-1",
                     "1",
                     "folder-1",
-                    "/tmp/合同.pdf",
-                    "临时上传区 / 合同.pdf",
+                    str(source),
+                    str(source),
                     "合同.pdf",
                     "application/pdf",
                     2048,
-                    "uploaded",
+                    "suggested",
                 ),
             )
             connection.execute(
@@ -79,6 +90,18 @@ class SuggestionsServiceTest(unittest.TestCase):
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 ("suggestion-1", "file-1", "符合合同特征", 0.91, "pending"),
+            )
+            connection.execute(
+                """
+                INSERT INTO suggestion_actions (id, suggestion_id, action_type, payload_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    "action-0",
+                    "suggestion-1",
+                    "set_folder",
+                    json.dumps({"folderPath": "家庭 / 合同"}, ensure_ascii=False),
+                ),
             )
             connection.execute(
                 """

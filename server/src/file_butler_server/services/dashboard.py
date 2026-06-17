@@ -31,7 +31,7 @@ def get_overview_dashboard(
             "metrics": _read_metrics(connection, user_id),
             "suggestions": _read_suggestions(connection, user_id),
             "activities": _read_activities(connection, user_id),
-            "knowledgePrompt": _read_knowledge_prompt(connection, user_id),
+            "knowledgePrompt": _read_file_prompt(connection, user_id),
         }
 
 
@@ -65,26 +65,23 @@ def _read_metrics(connection: sqlite3.Connection, user_id: str) -> list[dict[str
         """,
         (user_id,),
     ).fetchone()[0]
-    expiring_items = connection.execute(
+    analyzed_files = connection.execute(
         """
         SELECT COUNT(*)
-        FROM reminders
+        FROM files
         WHERE user_id = ?
-          AND status = 'active'
-          AND due_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+30 days')
+          AND status IN ('suggested', 'organized', 'indexed')
         """,
         (user_id,),
     ).fetchone()[0]
-    indexed_files = connection.execute(
+    folder_count = connection.execute(
         """
-        SELECT COUNT(DISTINCT file_id)
-        FROM knowledge_chunks
-        JOIN files ON files.id = knowledge_chunks.file_id
-        WHERE files.user_id = ?
+        SELECT COUNT(*)
+        FROM folders
+        WHERE user_id = ?
         """,
         (user_id,),
     ).fetchone()[0]
-    index_health = round((indexed_files / organized_files) * 100) if organized_files else 0
 
     return [
         {
@@ -102,18 +99,18 @@ def _read_metrics(connection: sqlite3.Connection, user_id: str) -> list[dict[str
             "tone": "success",
         },
         {
-            "key": "expiring_items",
-            "label": "即将到期事项",
-            "value": str(expiring_items),
-            "trend": "30 天内",
+            "key": "analyzed_files",
+            "label": "已分析文件",
+            "value": str(analyzed_files),
+            "trend": "已生成建议或已整理",
             "tone": "success",
         },
         {
-            "key": "index_health",
-            "label": "知识库索引完成度",
-            "value": f"{index_health}%",
-            "trend": "索引健康" if index_health >= 80 else "需要补充索引",
-            "tone": "success" if index_health >= 80 else "warning",
+            "key": "folder_count",
+            "label": "整理目录",
+            "value": str(folder_count),
+            "trend": "自动分类目录",
+            "tone": "success",
         },
     ]
 
@@ -175,28 +172,30 @@ def _read_activities(connection: sqlite3.Connection, user_id: str) -> list[dict[
     return activities
 
 
-def _read_knowledge_prompt(connection: sqlite3.Connection, user_id: str) -> dict[str, str]:
-    indexed_files = connection.execute(
+def _read_file_prompt(connection: sqlite3.Connection, user_id: str) -> dict[str, str]:
+    organized_files = connection.execute(
         """
-        SELECT COUNT(DISTINCT knowledge_chunks.file_id)
-        FROM knowledge_chunks
-        JOIN files ON files.id = knowledge_chunks.file_id
+        SELECT COUNT(*)
+        FROM files
         WHERE files.user_id = ?
+          AND files.status IN ('organized', 'indexed')
         """,
         (user_id,),
     ).fetchone()[0]
 
-    if indexed_files:
+    if organized_files:
         return {
-            "title": "知识库可以开始回答问题",
-            "description": "试试询问：“我有哪些合同快到期？”",
-            "actionLabel": "去问答",
+            "title": "文件库可以开始浏览",
+            "description": "已整理的文件会集中出现在文件库里。",
+            "actionLabel": "去文件库",
+            "targetPage": "library",
         }
 
     return {
-        "title": "知识库等待索引",
-        "description": "上传并确认文件后，FileButler 会建立可问答的资料库。",
-        "actionLabel": "上传文件",
+        "title": "还没有整理文件",
+        "description": "分析并确认文件后，FileButler 会移动到你的整理目录。",
+        "actionLabel": "分析文件",
+        "targetPage": "upload",
     }
 
 

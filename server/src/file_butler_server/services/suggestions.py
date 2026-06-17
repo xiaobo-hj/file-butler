@@ -177,7 +177,7 @@ def _read_suggestion_detail(
         "fileInfo": {
             "originalName": row["display_name"],
             "size": _format_size(row["size_bytes"]),
-            "uploadedAt": row["created_at"],
+            "analyzedAt": row["created_at"],
             "type": _file_type(row["mime_type"], row["display_name"]).upper(),
         },
     }
@@ -307,22 +307,14 @@ def _approve_and_execute(
         folder_id = _ensure_folder(connection, user_id, folder_path)
         target_path = _build_target_path(Path(root["root_path"]), folder_path, new_file_name)
         source_path = Path(row["current_path"])
-        before_state = {
-            "path": row["current_path"],
-            "displayName": row["display_name"],
-            "folderId": row["folder_id"],
-            "storageRootId": row["storage_root_id"],
-        }
+        if not source_path.exists():
+            raise ValueError("源文件不存在，无法执行整理。请重新选择文件分析。")
 
-        if source_path.exists():
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path = _dedupe_path(target_path)
-            shutil.move(str(source_path), str(target_path))
-            current_path = str(target_path)
-        else:
-            current_path = row["current_path"]
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path = _dedupe_path(target_path)
+        shutil.move(str(source_path), str(target_path))
+        current_path = str(target_path)
 
-        _record_file_version(connection, row)
         connection.execute(
             """
             UPDATE files
@@ -336,7 +328,6 @@ def _approve_and_execute(
             """,
             (root["id"], folder_id, current_path, new_file_name, row["id"]),
         )
-        _record_action_executions(connection, suggestion_id, before_state, {"path": current_path})
     else:
         connection.execute(
             """
@@ -350,7 +341,6 @@ def _approve_and_execute(
         )
 
     _apply_tags(connection, user_id, row["id"], tags)
-    _refresh_file_search(connection, row["id"], folder_path, new_file_name, tags)
     connection.execute(
         """
         UPDATE suggestion_actions
@@ -456,75 +446,6 @@ def _dedupe_path(path: Path) -> Path:
     raise ValueError("目标目录里同名文件过多，无法生成安全文件名。")
 
 
-def _record_file_version(connection: sqlite3.Connection, row: sqlite3.Row) -> None:
-    connection.execute(
-        """
-        INSERT INTO file_versions (
-          id,
-          file_id,
-          version_number,
-          path_at_version,
-          checksum_sha256,
-          size_bytes
-        )
-        VALUES (
-          ?,
-          ?,
-          COALESCE((SELECT MAX(version_number) FROM file_versions WHERE file_id = ?), 0) + 1,
-          ?,
-          ?,
-          ?
-        )
-        """,
-        (
-            f"version-{uuid.uuid4()}",
-            row["id"],
-            row["id"],
-            row["current_path"],
-            row["checksum_sha256"],
-            row["size_bytes"],
-        ),
-    )
-
-
-def _record_action_executions(
-    connection: sqlite3.Connection,
-    suggestion_id: str,
-    before_state: dict[str, Any],
-    after_state: dict[str, Any],
-) -> None:
-    action_rows = connection.execute(
-        """
-        SELECT id
-        FROM suggestion_actions
-        WHERE suggestion_id = ?
-        """,
-        (suggestion_id,),
-    ).fetchall()
-    connection.executemany(
-        """
-        INSERT INTO action_executions (
-          id,
-          action_id,
-          status,
-          before_state_json,
-          after_state_json
-        )
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        [
-            (
-                f"execution-{uuid.uuid4()}",
-                action["id"],
-                "success",
-                json.dumps(before_state, ensure_ascii=False),
-                json.dumps(after_state, ensure_ascii=False),
-            )
-            for action in action_rows
-        ],
-    )
-
-
 def _apply_tags(
     connection: sqlite3.Connection,
     user_id: str,
@@ -560,32 +481,6 @@ def _apply_tags(
             """,
             (file_id, tag_id),
         )
-
-
-def _refresh_file_search(
-    connection: sqlite3.Connection,
-    file_id: str,
-    folder_path: str,
-    file_name: str,
-    tags: list[str],
-) -> None:
-    extraction = _read_latest_extraction(connection, file_id)
-    connection.execute("DELETE FROM file_search WHERE file_id = ?", (file_id,))
-    connection.execute(
-        """
-        INSERT INTO file_search (file_id, display_name, summary, plain_text, tags, folder_path)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            file_id,
-            file_name,
-            extraction["summary"] if extraction else "",
-            extraction["plain_text"] if extraction else "",
-            " ".join(tags),
-            folder_path,
-        ),
-    )
-
 
 def _safe_file_name(file_name: str) -> str:
     cleaned = Path(file_name.replace("\\", "/")).name.strip()

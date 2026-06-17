@@ -18,10 +18,10 @@ class DashboardServiceTest(unittest.TestCase):
         self.assertEqual(dashboard["metrics"][0]["value"], "0")
         self.assertEqual(dashboard["metrics"][1]["value"], "0")
         self.assertEqual(dashboard["metrics"][2]["value"], "0")
-        self.assertEqual(dashboard["metrics"][3]["value"], "0%")
+        self.assertEqual(dashboard["metrics"][3]["value"], "0")
         self.assertEqual(dashboard["suggestions"], [])
         self.assertEqual(dashboard["activities"], [])
-        self.assertEqual(dashboard["knowledgePrompt"]["actionLabel"], "上传文件")
+        self.assertEqual(dashboard["knowledgePrompt"]["actionLabel"], "分析文件")
 
     def test_overview_dashboard_reads_from_database(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -33,11 +33,11 @@ class DashboardServiceTest(unittest.TestCase):
 
         self.assertEqual(dashboard["metrics"][0]["value"], "2")
         self.assertEqual(dashboard["metrics"][1]["value"], "1")
-        self.assertEqual(dashboard["metrics"][2]["value"], "1")
-        self.assertEqual(dashboard["metrics"][3]["value"], "50%")
+        self.assertEqual(dashboard["metrics"][2]["value"], "2")
+        self.assertEqual(dashboard["metrics"][3]["value"], "1")
         self.assertEqual(dashboard["suggestions"][0]["fileName"], "合同.pdf")
         self.assertEqual(dashboard["activities"][0]["title"], "已归档")
-        self.assertEqual(dashboard["knowledgePrompt"]["actionLabel"], "去问答")
+        self.assertEqual(dashboard["knowledgePrompt"]["actionLabel"], "去文件库")
 
     def _insert_dashboard_rows(self, database_path: Path) -> None:
         with connect_database(database_path) as connection:
@@ -108,20 +108,6 @@ class DashboardServiceTest(unittest.TestCase):
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 ("suggestion-1", "file-1", "建议整理", 0.9, "pending"),
-            )
-            connection.execute(
-                """
-                INSERT INTO knowledge_chunks (id, file_id, chunk_index, content)
-                VALUES (?, ?, ?, ?)
-                """,
-                ("chunk-1", "file-1", 0, "合同内容"),
-            )
-            connection.execute(
-                """
-                INSERT INTO reminders (id, user_id, file_id, title, due_at, status)
-                VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+10 days'), ?)
-                """,
-                ("reminder-1", "1", "file-1", "合同到期", "active"),
             )
             connection.execute(
                 """

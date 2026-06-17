@@ -12,24 +12,34 @@ from pydantic import BaseModel, Field
 from file_butler_server.core.database import initialize_database
 from file_butler_server.services.dashboard import get_overview_dashboard
 from file_butler_server.services.library import get_library_page
+from file_butler_server.services.settings import (
+    get_storage_root_setting,
+    update_storage_root_setting,
+)
 from file_butler_server.services.suggestions import decide_suggestion, get_suggestions_page
 from file_butler_server.services.uploads import (
-    get_upload_page,
-    register_upload_metadata,
-    upload_and_analyze_file,
+    analyze_file_path,
+    analyze_selected_file,
+    get_analysis_page,
+    register_analysis_metadata,
 )
 
 
-class UploadMetadataRequest(BaseModel):
+class AnalysisMetadataRequest(BaseModel):
     file_name: str = Field(min_length=1)
     size_bytes: int = Field(default=0, ge=0)
     mime_type: str | None = None
 
 
-class UploadFileRequest(BaseModel):
-    file_name: str = Field(min_length=1)
-    content_base64: str = Field(min_length=1)
+class AnalyzeFileRequest(BaseModel):
+    file_name: str | None = None
+    content_base64: str | None = None
     mime_type: str | None = None
+    source_path: str | None = None
+
+
+class StorageRootRequest(BaseModel):
+    root_path: str = Field(min_length=1)
 
 
 class SuggestionDecisionRequest(BaseModel):
@@ -68,13 +78,28 @@ def dashboard_overview() -> dict[str, object]:
 
 @app.get("/api/uploads")
 def upload_page() -> dict[str, object]:
-    return get_upload_page()
+    return get_analysis_page()
 
 
 @app.post("/api/uploads/register")
-def register_upload(request: UploadMetadataRequest) -> dict[str, object]:
+def register_upload(request: AnalysisMetadataRequest) -> dict[str, object]:
+    return register_analysis(request)
+
+
+@app.post("/api/uploads")
+def upload_file(request: AnalyzeFileRequest) -> dict[str, object]:
+    return analyze_file(request)
+
+
+@app.get("/api/analysis")
+def analysis_page() -> dict[str, object]:
+    return get_analysis_page()
+
+
+@app.post("/api/analysis/register")
+def register_analysis(request: AnalysisMetadataRequest) -> dict[str, object]:
     try:
-        return register_upload_metadata(
+        return register_analysis_metadata(
             file_name=request.file_name,
             size_bytes=request.size_bytes,
             mime_type=request.mime_type,
@@ -83,10 +108,14 @@ def register_upload(request: UploadMetadataRequest) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-@app.post("/api/uploads")
-def upload_file(request: UploadFileRequest) -> dict[str, object]:
+@app.post("/api/analysis")
+def analyze_file(request: AnalyzeFileRequest) -> dict[str, object]:
     try:
-        return upload_and_analyze_file(
+        if request.source_path:
+            return analyze_file_path(source_path=request.source_path)
+        if not request.file_name or not request.content_base64:
+            raise ValueError("请选择文件，或提供本机文件路径。")
+        return analyze_selected_file(
             file_name=request.file_name,
             content_base64=request.content_base64,
             mime_type=request.mime_type,
@@ -103,6 +132,19 @@ def suggestions_page() -> dict[str, object]:
 @app.get("/api/library")
 def library_page() -> dict[str, object]:
     return get_library_page()
+
+
+@app.get("/api/settings/storage-root")
+def storage_root_setting() -> dict[str, object]:
+    return get_storage_root_setting()
+
+
+@app.patch("/api/settings/storage-root")
+def update_storage_root(request: StorageRootRequest) -> dict[str, object]:
+    try:
+        return update_storage_root_setting(root_path=request.root_path)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @app.post("/api/suggestions/{suggestion_id}/decision")

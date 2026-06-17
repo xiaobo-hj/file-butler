@@ -80,7 +80,7 @@ def _format_file_row(row: sqlite3.Row) -> dict[str, Any]:
         "status": STATUS_LABELS.get(status, status),
         "rawStatus": status,
         "updatedAt": row["updated_at"],
-        "storageRoot": row["storage_root_name"] or "临时上传区",
+        "storageRoot": row["storage_root_name"] or "待分析区",
         "storageRootPath": row["storage_root_path"] or "",
         "summary": row["summary"] or "",
         "tags": _split_tags(row["tag_names"]),

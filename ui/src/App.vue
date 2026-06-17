@@ -2,20 +2,18 @@
 import { computed, onMounted, ref } from 'vue'
 import {
   AppstoreOutlined,
-  CloudUploadOutlined,
   FileOutlined,
   FilePdfOutlined,
   FileSearchOutlined,
   FolderOpenOutlined,
   InboxOutlined,
-  MessageOutlined,
   SearchOutlined,
   UploadOutlined,
 } from '@ant-design/icons-vue'
 
 const activePage = ref('overview')
 const dashboard = ref(null)
-const uploadPage = ref({ queue: [], hint: '' })
+const analysisPage = ref({ queue: [], hint: '' })
 const suggestionsPage = ref({ suggestions: [], selectedSuggestion: null, summary: null })
 const libraryPage = ref({
   summary: {
@@ -28,9 +26,12 @@ const libraryPage = ref({
   files: [],
   filters: { folders: [], statuses: [] },
 })
+const storageRoot = ref({ rootPath: '', displayName: '我的文件整理目录' })
+const storageRootDraft = ref('')
 const isLoading = ref(false)
-const isUploading = ref(false)
+const isAnalyzing = ref(false)
 const isDeciding = ref(false)
+const isSavingStorageRoot = ref(false)
 const loadError = ref('')
 const decisionNotice = ref('')
 const fileInput = ref(null)
@@ -40,17 +41,16 @@ const libraryFolderFilter = ref('all')
 
 const navItems = [
   { key: 'overview', label: '总览', icon: AppstoreOutlined },
-  { key: 'upload', label: '上传文件', icon: CloudUploadOutlined },
+  { key: 'upload', label: '分析文件', icon: InboxOutlined },
   { key: 'suggestions', label: '整理建议', icon: FileSearchOutlined },
   { key: 'library', label: '文件库', icon: FolderOpenOutlined },
-  { key: 'qa', label: '知识库问答', icon: MessageOutlined },
 ]
 
 const pageMeta = computed(() => {
   if (activePage.value === 'upload') {
     return {
-      title: '上传文件',
-      subtitle: 'Agent 会先分析文件内容并生成整理建议，用户确认前不会修改任何文件。',
+      title: '分析文件',
+      subtitle: '选择文件后只做分析和建议，确认后才移动到你的整理目录。',
     }
   }
   if (activePage.value === 'suggestions') {
@@ -62,12 +62,9 @@ const pageMeta = computed(() => {
   if (activePage.value === 'library') {
     return { title: '文件库', subtitle: '集中浏览已经整理和索引的个人文件。' }
   }
-  if (activePage.value === 'qa') {
-    return { title: '知识库问答', subtitle: '向你的个人资料库提问，并查看引用文件。' }
-  }
   return {
     title: 'FileButler 个人文件管家',
-    subtitle: '把杂乱文件整理成可搜索、可问答、可维护的个人资料库',
+    subtitle: '分析文件，确认建议，然后整理到你的本机目录',
   }
 })
 
@@ -78,9 +75,10 @@ const overviewModel = computed(
       suggestions: [],
       activities: [],
       knowledgePrompt: {
-        title: '知识库暂无可用数据',
-        description: '上传并确认文件后，这里会显示知识库状态。',
-        actionLabel: '上传文件',
+        title: '还没有整理文件',
+        description: '分析并确认文件后，FileButler 会移动到你的整理目录。',
+        actionLabel: '分析文件',
+        targetPage: 'upload',
       },
     },
 )
@@ -118,7 +116,13 @@ async function loadCurrentPage() {
     if (activePage.value === 'overview') {
       dashboard.value = await fetchJson('/api/dashboard/overview')
     } else if (activePage.value === 'upload') {
-      uploadPage.value = await fetchJson('/api/uploads')
+      const [analysis, setting] = await Promise.all([
+        fetchJson('/api/analysis'),
+        fetchJson('/api/settings/storage-root'),
+      ])
+      analysisPage.value = analysis
+      storageRoot.value = setting
+      storageRootDraft.value = setting.rootPath
     } else if (activePage.value === 'suggestions') {
       suggestionsPage.value = await fetchJson('/api/suggestions')
     } else if (activePage.value === 'library') {
@@ -156,11 +160,11 @@ async function registerSelectedFiles(event) {
     return
   }
 
-  isUploading.value = true
+  isAnalyzing.value = true
   loadError.value = ''
   try {
     for (const file of files) {
-      await fetchJson('/api/uploads', {
+      await fetchJson('/api/analysis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -173,9 +177,34 @@ async function registerSelectedFiles(event) {
     activePage.value = 'suggestions'
     await loadCurrentPage()
   } catch (error) {
-    loadError.value = '上传或生成建议失败，请检查后端服务和模型配置。'
+    loadError.value = '分析文件或生成建议失败，请检查后端服务和模型配置。'
   } finally {
-    isUploading.value = false
+    isAnalyzing.value = false
+  }
+}
+
+async function saveStorageRoot() {
+  const rootPath = storageRootDraft.value.trim()
+  if (!rootPath) {
+    loadError.value = '整理目录不能为空。'
+    return
+  }
+
+  isSavingStorageRoot.value = true
+  loadError.value = ''
+  decisionNotice.value = ''
+  try {
+    storageRoot.value = await fetchJson('/api/settings/storage-root', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root_path: rootPath }),
+    })
+    storageRootDraft.value = storageRoot.value.rootPath
+    decisionNotice.value = '整理目录已更新。'
+  } catch (error) {
+    loadError.value = '保存整理目录失败，请确认路径可创建、可写入。'
+  } finally {
+    isSavingStorageRoot.value = false
   }
 }
 
@@ -314,7 +343,7 @@ onMounted(loadCurrentPage)
             <a-button v-if="activePage === 'suggestions'" size="large">批量稍后</a-button>
             <a-button v-else type="primary" size="large" @click="switchPage('upload')">
               <template #icon><InboxOutlined /></template>
-              上传新文件
+              分析文件
             </a-button>
           </div>
         </header>
@@ -334,7 +363,7 @@ onMounted(loadCurrentPage)
           show-icon
         />
 
-        <a-spin :spinning="isLoading || isUploading || isDeciding">
+        <a-spin :spinning="isLoading || isAnalyzing || isDeciding || isSavingStorageRoot">
           <section v-if="activePage === 'overview'" class="page-section">
             <section class="metric-grid">
               <a-card
@@ -395,7 +424,10 @@ onMounted(loadCurrentPage)
                     <strong>{{ overviewModel.knowledgePrompt.title }}</strong>
                     <span>{{ overviewModel.knowledgePrompt.description }}</span>
                   </div>
-                  <a-button type="primary" @click="switchPage('qa')">
+                  <a-button
+                    type="primary"
+                    @click="switchPage(overviewModel.knowledgePrompt.targetPage ?? 'upload')"
+                  >
                     {{ overviewModel.knowledgePrompt.actionLabel }}
                   </a-button>
                 </section>
@@ -404,12 +436,33 @@ onMounted(loadCurrentPage)
           </section>
 
           <section v-else-if="activePage === 'upload'" class="page-section upload-page">
+            <a-card class="storage-root-card">
+              <div class="storage-root-copy">
+                <span>整理目录</span>
+                <strong>{{ storageRoot.displayName }}</strong>
+                <p>确认建议后，文件会移动到这个目录下的对应分类文件夹。</p>
+              </div>
+              <div class="storage-root-form">
+                <a-input
+                  v-model:value="storageRootDraft"
+                  placeholder="/Users/xiaobo/Documents/FileButler"
+                />
+                <a-button
+                  type="primary"
+                  :loading="isSavingStorageRoot"
+                  @click="saveStorageRoot"
+                >
+                  保存目录
+                </a-button>
+              </div>
+            </a-card>
+
             <a-card class="upload-drop-card">
               <button class="upload-drop-zone" type="button" @click="openFilePicker">
                 <UploadOutlined />
-                <strong>{{ isUploading ? '正在生成建议' : '选择文件上传' }}</strong>
-                <span>Agent 会保存副本、分析内容并生成整理建议</span>
-                <a-button type="primary" :loading="isUploading">选择文件</a-button>
+                <strong>{{ isAnalyzing ? '正在生成建议' : '选择文件分析' }}</strong>
+                <span>确认前只生成建议，不会放进整理目录</span>
+                <a-button type="primary" :loading="isAnalyzing">选择文件</a-button>
               </button>
               <input
                 ref="fileInput"
@@ -421,11 +474,11 @@ onMounted(loadCurrentPage)
             </a-card>
 
             <a-card class="upload-queue-card">
-              <template #title>上传队列</template>
+              <template #title>分析记录</template>
 
-              <a-empty v-if="!uploadPage.queue.length" description="暂无上传文件" />
+              <a-empty v-if="!analysisPage.queue.length" description="暂无分析文件" />
               <div v-else class="upload-queue">
-                <article v-for="item in uploadPage.queue" :key="item.id" class="upload-row">
+                <article v-for="item in analysisPage.queue" :key="item.id" class="upload-row">
                   <div>
                     <strong>{{ item.fileName }}</strong>
                     <span>{{ item.sizeLabel }}</span>
@@ -442,7 +495,7 @@ onMounted(loadCurrentPage)
                 </article>
               </div>
 
-              <div class="queue-hint">{{ uploadPage.hint }}</div>
+              <div class="queue-hint">{{ analysisPage.hint }}</div>
             </a-card>
           </section>
 
@@ -596,8 +649,8 @@ onMounted(loadCurrentPage)
                     <dd>{{ suggestionsPage.selectedSuggestion.fileInfo.size }}</dd>
                   </div>
                   <div>
-                    <dt>上传时间</dt>
-                    <dd>{{ suggestionsPage.selectedSuggestion.fileInfo.uploadedAt }}</dd>
+                    <dt>分析时间</dt>
+                    <dd>{{ suggestionsPage.selectedSuggestion.fileInfo.analyzedAt }}</dd>
                   </div>
                 </dl>
                 <span class="detail-label">置信度</span>

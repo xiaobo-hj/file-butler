@@ -406,12 +406,63 @@ button {
 
 .upload-drop-card,
 .upload-queue-card,
+.storage-root-card,
 .suggestion-list-panel,
 .suggestion-detail-panel,
 .file-info-panel {
   border: 0;
   border-radius: 16px;
   box-shadow: none;
+}
+
+.storage-root-card .ant-card-body {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(360px, 560px);
+  align-items: center;
+  gap: 28px;
+  padding: 24px 28px;
+}
+
+.storage-root-copy {
+  min-width: 0;
+}
+
+.storage-root-copy span {
+  color: #6b7280;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.storage-root-copy strong {
+  display: block;
+  margin-top: 6px;
+  color: #111827;
+  font-size: 20px;
+  line-height: 1.3;
+  font-weight: 800;
+}
+
+.storage-root-copy p {
+  margin: 8px 0 0;
+  color: #6b7280;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.storage-root-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px;
+  gap: 12px;
+}
+
+.storage-root-form .ant-input,
+.storage-root-form .ant-btn {
+  height: 40px;
+  border-radius: 10px;
+}
+
+.storage-root-form .ant-btn {
+  font-weight: 800;
 }
 
 .upload-drop-card .ant-card-body {
@@ -1027,6 +1078,11 @@ button {
   }
 
   .suggestions-page {
+    grid-template-columns: 1fr;
+  }
+
+  .storage-root-card .ant-card-body,
+  .storage-root-form {
     grid-template-columns: 1fr;
   }
 

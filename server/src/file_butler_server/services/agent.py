@@ -1,4 +1,4 @@
-"""Agent suggestions for uploaded files."""
+"""Agent suggestions for analyzed files."""
 
 from __future__ import annotations
 

@@ -1,23 +1,24 @@
-"""Upload page queries and metadata registration."""
+"""File analysis page queries and registration."""
 
 from __future__ import annotations
 
-import base64
 import binascii
 import hashlib
 import json
+import mimetypes
 import sqlite3
 import uuid
 from pathlib import Path
 from typing import Any
 
 from file_butler_server.core.current_user import CURRENT_USER_ID
-from file_butler_server.core.database import connect_database, default_upload_dir
+from file_butler_server.core.database import connect_database, default_analysis_dir
 from file_butler_server.services.agent import OrganizationPlan, build_organization_plan
 
 
 STATUS_LABELS = {
-    "uploaded": "已上传",
+    "uploaded": "已选择",
+    "selected": "已选择",
     "analyzing": "解析中",
     "suggested": "已生成建议",
     "approved": "已确认",
@@ -28,6 +29,7 @@ STATUS_LABELS = {
 
 STATUS_PROGRESS = {
     "uploaded": 18,
+    "selected": 18,
     "analyzing": 62,
     "suggested": 100,
     "approved": 100,
@@ -37,7 +39,7 @@ STATUS_PROGRESS = {
 }
 
 
-def get_upload_page(
+def get_analysis_page(
     database_path: str | Path | None = None,
     user_id: str = CURRENT_USER_ID,
 ) -> dict[str, Any]:
@@ -54,12 +56,19 @@ def get_upload_page(
         ).fetchall()
 
     return {
-        "queue": [_format_upload_row(row) for row in rows],
-        "hint": "提示：你可以继续上传，FileButler 会把每个文件转成待确认建议。",
+        "queue": [_format_analysis_row(row) for row in rows],
+        "hint": "提示：选择文件后只生成建议，确认前不会放进你的整理目录。",
     }
 
 
-def register_upload_metadata(
+def get_upload_page(
+    database_path: str | Path | None = None,
+    user_id: str = CURRENT_USER_ID,
+) -> dict[str, Any]:
+    return get_analysis_page(database_path, user_id)
+
+
+def register_analysis_metadata(
     *,
     file_name: str,
     size_bytes: int,
@@ -68,7 +77,7 @@ def register_upload_metadata(
     user_id: str = CURRENT_USER_ID,
 ) -> dict[str, Any]:
     file_id = f"file-{uuid.uuid4()}"
-    upload_path = f"临时上传区/{file_name}"
+    pending_path = f"待分析区/{file_name}"
 
     try:
         with connect_database(database_path) as connection:
@@ -89,12 +98,12 @@ def register_upload_metadata(
                 (
                     file_id,
                     user_id,
-                    upload_path,
-                    upload_path,
+                    pending_path,
+                    pending_path,
                     file_name,
                     mime_type,
                     max(size_bytes, 0),
-                    "uploaded",
+                    "selected",
                 ),
             )
     except sqlite3.IntegrityError as error:
@@ -104,13 +113,30 @@ def register_upload_metadata(
         "id": file_id,
         "fileName": file_name,
         "sizeLabel": _format_size(size_bytes),
-        "progress": STATUS_PROGRESS["uploaded"],
-        "status": STATUS_LABELS["uploaded"],
+        "progress": STATUS_PROGRESS["selected"],
+        "status": STATUS_LABELS["selected"],
         "tone": "default",
     }
 
 
-def upload_and_analyze_file(
+def register_upload_metadata(
+    *,
+    file_name: str,
+    size_bytes: int,
+    mime_type: str | None,
+    database_path: str | Path | None = None,
+    user_id: str = CURRENT_USER_ID,
+) -> dict[str, Any]:
+    return register_analysis_metadata(
+        file_name=file_name,
+        size_bytes=size_bytes,
+        mime_type=mime_type,
+        database_path=database_path,
+        user_id=user_id,
+    )
+
+
+def analyze_selected_file(
     *,
     file_name: str,
     content_base64: str,
@@ -122,7 +148,7 @@ def upload_and_analyze_file(
     safe_name = _safe_file_name(file_name)
     content = _decode_base64(content_base64)
     checksum = hashlib.sha256(content).hexdigest()
-    upload_path = _write_upload_copy(file_id, safe_name, content, database_path)
+    source_path = _write_analysis_source(file_id, safe_name, content, database_path)
     text_preview = _extract_text_preview(content, mime_type, safe_name)
     plan = build_organization_plan(
         file_name=safe_name,
@@ -150,8 +176,8 @@ def upload_and_analyze_file(
                 (
                     file_id,
                     user_id,
-                    str(upload_path),
-                    str(upload_path),
+                    str(source_path),
+                    str(source_path),
                     safe_name,
                     mime_type,
                     len(content),
@@ -179,6 +205,97 @@ def upload_and_analyze_file(
 
 
 def _format_upload_row(row: sqlite3.Row) -> dict[str, Any]:
+    return _format_analysis_row(row)
+
+
+def upload_and_analyze_file(
+    *,
+    file_name: str,
+    content_base64: str,
+    mime_type: str | None,
+    database_path: str | Path | None = None,
+    user_id: str = CURRENT_USER_ID,
+) -> dict[str, Any]:
+    return analyze_selected_file(
+        file_name=file_name,
+        content_base64=content_base64,
+        mime_type=mime_type,
+        database_path=database_path,
+        user_id=user_id,
+    )
+
+
+def analyze_file_path(
+    *,
+    source_path: str | Path,
+    database_path: str | Path | None = None,
+    user_id: str = CURRENT_USER_ID,
+) -> dict[str, Any]:
+    path = Path(source_path).expanduser()
+    if not path.exists() or not path.is_file():
+        raise ValueError("选择的文件不存在，或不是普通文件。")
+
+    file_id = f"file-{uuid.uuid4()}"
+    safe_name = _safe_file_name(path.name)
+    content = path.read_bytes()
+    checksum = hashlib.sha256(content).hexdigest()
+    mime_type = mimetypes.guess_type(safe_name)[0]
+    text_preview = _extract_text_preview(content, mime_type, safe_name)
+    plan = build_organization_plan(
+        file_name=safe_name,
+        mime_type=mime_type,
+        text_preview=text_preview,
+    )
+
+    try:
+        with connect_database(database_path) as connection:
+            connection.execute(
+                """
+                INSERT INTO files (
+                  id,
+                  user_id,
+                  original_path,
+                  current_path,
+                  display_name,
+                  mime_type,
+                  size_bytes,
+                  checksum_sha256,
+                  status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    file_id,
+                    user_id,
+                    str(path),
+                    str(path),
+                    safe_name,
+                    mime_type,
+                    len(content),
+                    checksum,
+                    "suggested",
+                ),
+            )
+            _persist_agent_outputs(connection, file_id, user_id, plan, text_preview)
+    except sqlite3.IntegrityError as error:
+        raise ValueError("当前用户不存在，或文件路径已存在。") from error
+
+    return {
+        "id": file_id,
+        "fileName": safe_name,
+        "sizeLabel": _format_size(len(content)),
+        "progress": STATUS_PROGRESS["suggested"],
+        "status": STATUS_LABELS["suggested"],
+        "tone": "success",
+        "suggestion": {
+            "folder": plan.folder_path,
+            "newFileName": plan.new_file_name,
+            "confidence": _format_confidence(plan.confidence),
+        },
+    }
+
+
+def _format_analysis_row(row: sqlite3.Row) -> dict[str, Any]:
     status = row["status"]
     return {
         "id": row["id"],
@@ -242,27 +359,6 @@ def _persist_agent_outputs(
     )
     connection.execute(
         """
-        INSERT INTO knowledge_chunks (
-          id,
-          file_id,
-          extraction_id,
-          chunk_index,
-          content,
-          metadata_json
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            f"chunk-{uuid.uuid4()}",
-            file_id,
-            extraction_id,
-            0,
-            text_preview or plan.summary,
-            json.dumps({"source": "upload"}, ensure_ascii=False),
-        ),
-    )
-    connection.execute(
-        """
         INSERT INTO organization_suggestions (id, file_id, reason, confidence, status)
         VALUES (?, ?, ?, ?, ?)
         """,
@@ -290,20 +386,6 @@ def _persist_agent_outputs(
     )
     connection.execute(
         """
-        INSERT INTO file_search (file_id, display_name, summary, plain_text, tags, folder_path)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            file_id,
-            plan.new_file_name,
-            plan.summary,
-            text_preview,
-            " ".join(plan.tags),
-            plan.folder_path,
-        ),
-    )
-    connection.execute(
-        """
         INSERT INTO audit_logs (id, user_id, entity_type, entity_id, event_type, payload_json)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
@@ -327,19 +409,21 @@ def _persist_agent_outputs(
 
 def _decode_base64(content_base64: str) -> bytes:
     try:
+        import base64
+
         return base64.b64decode(content_base64, validate=True)
     except binascii.Error as error:
-        raise ValueError("上传文件内容不是合法的 base64。") from error
+        raise ValueError("文件内容不是合法的 base64。") from error
 
 
-def _write_upload_copy(
+def _write_analysis_source(
     file_id: str,
     file_name: str,
     content: bytes,
     database_path: str | Path | None,
 ) -> Path:
-    upload_root = Path(database_path).parent / "uploads" if database_path is not None else default_upload_dir()
-    folder = upload_root / file_id
+    analysis_root = Path(database_path).parent / "analysis" if database_path is not None else default_analysis_dir()
+    folder = analysis_root / file_id
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / file_name
     path.write_bytes(content)
