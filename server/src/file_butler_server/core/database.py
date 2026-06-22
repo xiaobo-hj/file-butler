@@ -224,13 +224,5 @@ def default_data_dir() -> Path:
     return Path(os.environ.get("FILE_BUTLER_DATA_DIR", DEFAULT_DATA_DIR)).expanduser()
 
 
-def default_analysis_dir() -> Path:
-    return default_data_dir() / "analysis"
-
-
-def default_upload_dir() -> Path:
-    return default_analysis_dir()
-
-
 def default_storage_root_path() -> Path:
     return Path(os.environ.get("FILE_BUTLER_STORAGE_ROOT", default_data_dir() / "storage")).expanduser()

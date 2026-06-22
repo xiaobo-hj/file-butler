@@ -27,11 +27,15 @@ def get_suggestions_page(
 ) -> dict[str, Any]:
     with connect_database(database_path) as connection:
         rows = _read_suggestion_rows(connection, user_id)
-        selected = _read_suggestion_detail(connection, rows[0]["id"], user_id) if rows else None
+        suggestions = [
+            {**row, **(_read_suggestion_detail(connection, row["id"], user_id) or {})}
+            for row in rows
+        ]
+        selected = suggestions[0] if suggestions else None
 
     pending_count = sum(1 for row in rows if row["rawStatus"] in {"pending", "needs_input", "completed"})
     return {
-        "suggestions": rows,
+        "suggestions": suggestions,
         "selectedSuggestion": selected,
         "summary": {
             "pendingCount": pending_count,

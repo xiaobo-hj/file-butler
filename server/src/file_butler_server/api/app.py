@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from file_butler_server.core.database import initialize_database
 from file_butler_server.services.dashboard import get_overview_dashboard
+from file_butler_server.services.file_picker import select_local_file_paths
 from file_butler_server.services.library import get_library_page
 from file_butler_server.services.settings import (
     get_storage_root_setting,
@@ -121,6 +122,14 @@ def analyze_file(request: AnalyzeFileRequest) -> dict[str, object]:
             mime_type=request.mime_type,
         )
     except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/analysis/select-local-files")
+def select_local_files() -> dict[str, object]:
+    try:
+        return {"paths": select_local_file_paths()}
+    except RuntimeError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 

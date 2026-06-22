@@ -34,12 +34,18 @@ def build_organization_plan(
     file_name: str,
     mime_type: str | None,
     text_preview: str,
+    library_context: dict[str, Any] | None = None,
 ) -> OrganizationPlan:
-    plan = _call_qwen(file_name=file_name, mime_type=mime_type, text_preview=text_preview)
+    plan = _call_qwen(
+        file_name=file_name,
+        mime_type=mime_type,
+        text_preview=text_preview,
+        library_context=library_context,
+    )
     if plan is not None:
         return plan
 
-    return _build_local_plan(file_name=file_name, mime_type=mime_type, text_preview=text_preview)
+    return _build_fallback_plan(file_name=file_name, mime_type=mime_type, text_preview=text_preview)
 
 
 def _call_qwen(
@@ -47,6 +53,7 @@ def _call_qwen(
     file_name: str,
     mime_type: str | None,
     text_preview: str,
+    library_context: dict[str, Any] | None,
 ) -> OrganizationPlan | None:
     _load_local_env()
     api_key = os.environ.get("QWEN_API_KEY")
@@ -62,10 +69,17 @@ def _call_qwen(
             {
                 "role": "system",
                 "content": (
-                    "你是 FileButler 的文件整理 Agent。只返回一个 JSON 对象，不要 Markdown。"
-                    "字段必须包含 summary, folderPath, newFileName, tags, keyInfo, reason, confidence。"
+                    "你是 FileButler 的文件整理 Agent。"
+                    "只返回一个 JSON 对象，不要 Markdown。"
+                    "字段必须包含 summary, folderPath, newFileName, tags, keyInfo, "
+                    "reason, confidence。"
                     "folderPath 使用中文路径层级，层级之间用 ' / ' 分隔。"
-                    "newFileName 保留原文件扩展名，避免路径分隔符。confidence 是 0 到 1 的数字。"
+                    "优先从 existingFolders 中选择最合适的目录；"
+                    "只有明显没有合适目录时才新建 folderPath。"
+                    "判断目录时要参考 existingFiles 的 fileName、folderPath、summary，"
+                    "保持同类文件放在同一目录。"
+                    "newFileName 保留原文件扩展名，避免路径分隔符。"
+                    "confidence 是 0 到 1 的数字。"
                 ),
             },
             {
@@ -75,6 +89,8 @@ def _call_qwen(
                         "fileName": file_name,
                         "mimeType": mime_type,
                         "textPreview": text_preview[:6000],
+                        "existingFolders": (library_context or {}).get("folders", []),
+                        "existingFiles": (library_context or {}).get("files", []),
                     },
                     ensure_ascii=False,
                 ),
@@ -116,7 +132,11 @@ def _call_qwen(
     return _normalize_plan(raw_plan, file_name, extractor=f"qwen:{model}")
 
 
-def _normalize_plan(raw_plan: dict[str, Any], original_file_name: str, extractor: str) -> OrganizationPlan:
+def _normalize_plan(
+    raw_plan: dict[str, Any],
+    original_file_name: str,
+    extractor: str,
+) -> OrganizationPlan:
     tags = raw_plan.get("tags", [])
     if not isinstance(tags, list):
         tags = []
@@ -124,62 +144,42 @@ def _normalize_plan(raw_plan: dict[str, Any], original_file_name: str, extractor
     if not isinstance(key_info, dict):
         key_info = {}
 
+    reason = str(raw_plan.get("reason") or "根据文件名和可提取内容生成整理建议。")
+
     return OrganizationPlan(
         summary=str(raw_plan.get("summary") or "已导入文件，等待确认整理。")[:1200],
         folder_path=_clean_folder_path(str(raw_plan.get("folderPath") or "未分类")),
         new_file_name=_safe_file_name(str(raw_plan.get("newFileName") or original_file_name)),
         tags=[str(tag)[:24] for tag in tags if str(tag).strip()][:8],
         key_info={str(key)[:32]: str(value)[:160] for key, value in key_info.items() if value},
-        reason=str(raw_plan.get("reason") or "根据文件名和可提取内容生成整理建议。")[:1200],
+        reason=reason[:1200],
         confidence=_clamp_confidence(raw_plan.get("confidence")),
         extractor=extractor,
     )
 
 
-def _build_local_plan(
+def _build_fallback_plan(
     *,
     file_name: str,
     mime_type: str | None,
     text_preview: str,
 ) -> OrganizationPlan:
-    lower_text = f"{file_name}\n{text_preview}".lower()
     suffix = Path(file_name).suffix
-    stem = Path(file_name).stem
-
-    if any(keyword in lower_text for keyword in ("合同", "contract", "租赁", "协议")):
-        folder = "家庭 / 合同"
-        tags = ["合同", "待确认"]
-        prefix = "合同"
-        reason = "文件名或内容包含合同、协议、租赁等关键词，建议归档到合同目录。"
-    elif any(keyword in lower_text for keyword in ("发票", "invoice", "receipt", "报销")):
-        folder = "财务 / 发票"
-        tags = ["发票", "财务"]
-        prefix = "发票"
-        reason = "文件名或内容包含发票、报销、收据等关键词，建议归档到财务目录。"
-    elif any(keyword in lower_text for keyword in ("简历", "resume", "cv")):
-        folder = "个人 / 简历"
-        tags = ["简历", "个人"]
-        prefix = "简历"
-        reason = "文件名或内容包含简历相关关键词，建议归档到个人简历目录。"
-    else:
-        folder = "未分类"
-        tags = ["待确认"]
-        prefix = "资料"
-        reason = "未识别到明确类别，先放入未分类目录供你确认。"
-
-    cleaned_stem = re.sub(r"\s+", "_", stem).strip("_") or "文件"
-    new_name = f"{prefix}_{cleaned_stem}{suffix}"
-    summary = text_preview.strip().replace("\n", " ")[:240] if text_preview.strip() else "已导入文件，等待确认整理。"
+    summary = (
+        text_preview.strip().replace("\n", " ")[:240]
+        if text_preview.strip()
+        else "已导入文件，等待确认整理。"
+    )
 
     return OrganizationPlan(
         summary=summary,
-        folder_path=folder,
-        new_file_name=_safe_file_name(new_name),
-        tags=tags,
+        folder_path="未分类",
+        new_file_name=_safe_file_name(file_name),
+        tags=["待确认"],
         key_info={"文件类型": mime_type or suffix.lstrip(".") or "未知"},
-        reason=reason,
-        confidence=0.72,
-        extractor="local-rule",
+        reason="模型未返回有效建议，先放入未分类目录供你确认。",
+        confidence=0.0,
+        extractor="fallback",
     )
 
 

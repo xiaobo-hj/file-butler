@@ -31,10 +31,11 @@ const storageRootDraft = ref('')
 const isLoading = ref(false)
 const isAnalyzing = ref(false)
 const isDeciding = ref(false)
+const isSelectingFile = ref(false)
 const isSavingStorageRoot = ref(false)
 const loadError = ref('')
 const decisionNotice = ref('')
-const fileInput = ref(null)
+const sourcePathDraft = ref('')
 const librarySearch = ref('')
 const libraryStatusFilter = ref('all')
 const libraryFolderFilter = ref('all')
@@ -85,6 +86,14 @@ const overviewModel = computed(
 
 const selectedSuggestionIsPending = computed(
   () => suggestionsPage.value.selectedSuggestion?.rawStatus === 'pending',
+)
+
+const selectedSuggestionExecutionPercent = computed(() =>
+  selectedSuggestionIsPending.value ? 0 : 100,
+)
+
+const selectedSuggestionExecutionLabel = computed(() =>
+  selectedSuggestionIsPending.value ? '待确认' : '100%',
 )
 
 const hasPendingSuggestions = computed(
@@ -149,36 +158,56 @@ function switchPage(pageKey) {
   loadCurrentPage()
 }
 
-function openFilePicker() {
-  fileInput.value?.click()
-}
-
-async function registerSelectedFiles(event) {
-  const files = Array.from(event.target.files ?? [])
-  event.target.value = ''
-  if (!files.length) {
+async function analyzeSourcePath() {
+  const sourcePath = sourcePathDraft.value.trim()
+  if (!sourcePath) {
+    loadError.value = '请填写本机文件路径。'
     return
   }
 
   isAnalyzing.value = true
   loadError.value = ''
   try {
-    for (const file of files) {
+    await fetchJson('/api/analysis', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_path: sourcePath }),
+    })
+    sourcePathDraft.value = ''
+    activePage.value = 'suggestions'
+    await loadCurrentPage()
+  } catch (error) {
+    loadError.value = '分析文件或生成建议失败，请确认路径存在、后端服务已启动。'
+  } finally {
+    isAnalyzing.value = false
+  }
+}
+
+async function selectAndAnalyzeLocalFiles() {
+  isSelectingFile.value = true
+  isAnalyzing.value = true
+  loadError.value = ''
+  try {
+    const selection = await fetchJson('/api/analysis/select-local-files', {
+      method: 'POST',
+    })
+    const paths = selection.paths ?? []
+    if (!paths.length) {
+      return
+    }
+    for (const sourcePath of paths) {
       await fetchJson('/api/analysis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          file_name: file.name,
-          content_base64: await fileToBase64(file),
-          mime_type: file.type || null,
-        }),
+        body: JSON.stringify({ source_path: sourcePath }),
       })
     }
     activePage.value = 'suggestions'
     await loadCurrentPage()
   } catch (error) {
-    loadError.value = '分析文件或生成建议失败，请检查后端服务和模型配置。'
+    loadError.value = '选择或分析文件失败，请确认后端服务在本机运行。'
   } finally {
+    isSelectingFile.value = false
     isAnalyzing.value = false
   }
 }
@@ -251,15 +280,9 @@ async function approveAllSuggestions() {
   }
 }
 
-async function fileToBase64(file) {
-  const buffer = await file.arrayBuffer()
-  const bytes = new Uint8Array(buffer)
-  const chunkSize = 0x8000
-  let binary = ''
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize))
-  }
-  return btoa(binary)
+function selectSuggestion(suggestion) {
+  suggestionsPage.value.selectedSuggestion = suggestion
+  decisionNotice.value = ''
 }
 
 function libraryStatusColor(status) {
@@ -458,19 +481,29 @@ onMounted(loadCurrentPage)
             </a-card>
 
             <a-card class="upload-drop-card">
-              <button class="upload-drop-zone" type="button" @click="openFilePicker">
+              <div class="source-path-zone">
                 <UploadOutlined />
-                <strong>{{ isAnalyzing ? '正在生成建议' : '选择文件分析' }}</strong>
-                <span>确认前只生成建议，不会放进整理目录</span>
-                <a-button type="primary" :loading="isAnalyzing">选择文件</a-button>
-              </button>
-              <input
-                ref="fileInput"
-                class="hidden-file-input"
-                type="file"
-                multiple
-                @change="registerSelectedFiles"
-              />
+                <strong>{{ isAnalyzing ? '正在生成建议' : '选择本机文件分析' }}</strong>
+                <span>本地服务打开系统文件选择器，直接读取源文件，不会复制文件。</span>
+                <a-button
+                  type="primary"
+                  size="large"
+                  :loading="isSelectingFile || isAnalyzing"
+                  @click="selectAndAnalyzeLocalFiles"
+                >
+                  选择文件
+                </a-button>
+                <div class="source-path-form">
+                  <a-input
+                    v-model:value="sourcePathDraft"
+                    placeholder="也可以粘贴本机路径：/Users/xiaobo/Documents/example.pdf"
+                    @press-enter="analyzeSourcePath"
+                  />
+                  <a-button :loading="isAnalyzing" @click="analyzeSourcePath">
+                    路径分析
+                  </a-button>
+                </div>
+              </div>
             </a-card>
 
             <a-card class="upload-queue-card">
@@ -509,6 +542,12 @@ onMounted(loadCurrentPage)
                   :key="suggestion.id"
                   class="compact-suggestion-row"
                   :class="{ selected: suggestion.id === suggestionsPage.selectedSuggestion?.id }"
+                  role="button"
+                  tabindex="0"
+                  :aria-pressed="suggestion.id === suggestionsPage.selectedSuggestion?.id"
+                  @click="selectSuggestion(suggestion)"
+                  @keydown.enter.prevent="selectSuggestion(suggestion)"
+                  @keydown.space.prevent="selectSuggestion(suggestion)"
                 >
                   <div>
                     <strong>{{ suggestion.fileName }}</strong>
@@ -653,7 +692,16 @@ onMounted(loadCurrentPage)
                     <dd>{{ suggestionsPage.selectedSuggestion.fileInfo.analyzedAt }}</dd>
                   </div>
                 </dl>
-                <span class="detail-label">置信度</span>
+                <span class="detail-label">执行状态</span>
+                <a-progress
+                  :percent="selectedSuggestionExecutionPercent"
+                  :show-info="false"
+                  :status="selectedSuggestionIsPending ? 'active' : 'success'"
+                />
+                <strong class="execution-large">
+                  {{ selectedSuggestionExecutionLabel }}
+                </strong>
+                <span class="detail-label metric-label-spaced">AI 置信度</span>
                 <a-progress
                   :percent="Number.parseInt(suggestionsPage.selectedSuggestion.confidence, 10) || 0"
                   :show-info="false"

@@ -22,6 +22,27 @@ class SuggestionsServiceTest(unittest.TestCase):
         self.assertEqual(page["selectedSuggestion"]["tags"], ["合同", "家庭"])
         self.assertEqual(page["selectedSuggestion"]["keyInfo"][0]["label"], "甲方")
 
+    def test_suggestions_page_includes_detail_for_each_list_item(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "file_butler.db"
+            initialize_database(database_path)
+            self._insert_suggestion_rows(database_path)
+            self._insert_suggestion_rows(
+                database_path,
+                suggestion_id="suggestion-2",
+                file_id="file-2",
+                file_name="通知书.pdf",
+                new_file_name="资料_通知书.pdf",
+                source_path=Path("/tmp/通知书.pdf"),
+            )
+
+            page = get_suggestions_page(database_path)
+
+        second_suggestion = next(item for item in page["suggestions"] if item["id"] == "suggestion-2")
+        self.assertEqual(second_suggestion["suggestedFileName"], "资料_通知书.pdf")
+        self.assertEqual(second_suggestion["currentPath"], "/tmp/通知书.pdf")
+        self.assertEqual(second_suggestion["fileInfo"]["originalName"], "通知书.pdf")
+
     def test_decide_suggestion_updates_current_user_suggestion(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -42,19 +63,27 @@ class SuggestionsServiceTest(unittest.TestCase):
         self.assertEqual(result["status"], "approved")
         self.assertEqual(status, "approved")
 
-    def _insert_suggestion_rows(self, database_path: Path, source_path: Path | None = None) -> None:
+    def _insert_suggestion_rows(
+        self,
+        database_path: Path,
+        source_path: Path | None = None,
+        suggestion_id: str = "suggestion-1",
+        file_id: str = "file-1",
+        file_name: str = "合同.pdf",
+        new_file_name: str = "2026_合同.pdf",
+    ) -> None:
         source = source_path or Path("/tmp/合同.pdf")
         with connect_database(database_path) as connection:
-            connection.execute("INSERT INTO users (id, display_name) VALUES (?, ?)", ("1", "用户"))
+            connection.execute("INSERT OR IGNORE INTO users (id, display_name) VALUES (?, ?)", ("1", "用户"))
             connection.execute(
                 """
-                INSERT INTO storage_roots (id, user_id, root_path, display_name)
+                INSERT OR IGNORE INTO storage_roots (id, user_id, root_path, display_name)
                 VALUES (?, ?, ?, ?)
                 """,
                 ("root-1", "1", str(database_path.parent / "storage"), "测试整理目录"),
             )
             connection.execute(
-                "INSERT INTO folders (id, user_id, parent_id, name, path) VALUES (?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO folders (id, user_id, parent_id, name, path) VALUES (?, ?, ?, ?, ?)",
                 ("folder-1", "1", None, "合同", "家庭 / 合同"),
             )
             connection.execute(
@@ -73,12 +102,12 @@ class SuggestionsServiceTest(unittest.TestCase):
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    "file-1",
+                    file_id,
                     "1",
                     "folder-1",
                     str(source),
                     str(source),
-                    "合同.pdf",
+                    file_name,
                     "application/pdf",
                     2048,
                     "suggested",
@@ -89,7 +118,7 @@ class SuggestionsServiceTest(unittest.TestCase):
                 INSERT INTO organization_suggestions (id, file_id, reason, confidence, status)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                ("suggestion-1", "file-1", "符合合同特征", 0.91, "pending"),
+                (suggestion_id, file_id, "符合合同特征", 0.91, "pending"),
             )
             connection.execute(
                 """
@@ -97,8 +126,8 @@ class SuggestionsServiceTest(unittest.TestCase):
                 VALUES (?, ?, ?, ?)
                 """,
                 (
-                    "action-0",
-                    "suggestion-1",
+                    f"action-folder-{suggestion_id}",
+                    suggestion_id,
                     "set_folder",
                     json.dumps({"folderPath": "家庭 / 合同"}, ensure_ascii=False),
                 ),
@@ -109,10 +138,10 @@ class SuggestionsServiceTest(unittest.TestCase):
                 VALUES (?, ?, ?, ?)
                 """,
                 (
-                    "action-1",
-                    "suggestion-1",
+                    f"action-rename-{suggestion_id}",
+                    suggestion_id,
                     "rename",
-                    json.dumps({"newFileName": "2026_合同.pdf"}, ensure_ascii=False),
+                    json.dumps({"newFileName": new_file_name}, ensure_ascii=False),
                 ),
             )
             connection.execute(
@@ -121,8 +150,8 @@ class SuggestionsServiceTest(unittest.TestCase):
                 VALUES (?, ?, ?, ?)
                 """,
                 (
-                    "action-2",
-                    "suggestion-1",
+                    f"action-tag-{suggestion_id}",
+                    suggestion_id,
                     "tag",
                     json.dumps({"tags": ["合同", "家庭"]}, ensure_ascii=False),
                 ),
@@ -139,8 +168,8 @@ class SuggestionsServiceTest(unittest.TestCase):
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 (
-                    "extraction-1",
-                    "file-1",
+                    f"extraction-{file_id}",
+                    file_id,
                     "test",
                     "这是一份合同。",
                     json.dumps({"甲方": "张三"}, ensure_ascii=False),

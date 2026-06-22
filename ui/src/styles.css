@@ -469,7 +469,7 @@ button {
   padding: 36px;
 }
 
-.upload-drop-zone {
+.source-path-zone {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -481,33 +481,46 @@ button {
   background: #fbfdff;
   border: 2px dashed #5b5fef;
   border-radius: 16px;
-  cursor: pointer;
 }
 
-.upload-drop-zone .anticon {
+.source-path-zone .anticon {
   color: #5b5fef;
   font-size: 40px;
 }
 
-.upload-drop-zone strong {
+.source-path-zone strong {
   color: #111827;
   font-size: 24px;
   font-weight: 800;
 }
 
-.upload-drop-zone span {
+.source-path-zone span {
   font-size: 15px;
 }
 
-.upload-drop-zone .ant-btn {
-  min-width: 170px;
+.source-path-zone > .ant-btn {
+  min-width: 180px;
   height: 42px;
   border-radius: 10px;
   font-weight: 800;
 }
 
-.hidden-file-input {
-  display: none;
+.source-path-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 128px;
+  gap: 12px;
+  margin-top: 8px;
+  width: min(100%, 680px);
+}
+
+.source-path-form .ant-input,
+.source-path-form .ant-btn {
+  height: 42px;
+  border-radius: 10px;
+}
+
+.source-path-form .ant-btn {
+  font-weight: 800;
 }
 
 .upload-queue-card .ant-card-head,
@@ -611,6 +624,18 @@ button {
   padding: 12px 14px;
   border: 1px solid #e5e7eb;
   border-radius: 12px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.compact-suggestion-row:hover,
+.compact-suggestion-row:focus-visible {
+  background: #f8fafc;
+  border-color: #a5b4fc;
+  outline: 0;
 }
 
 .compact-suggestion-row.selected {
@@ -843,6 +868,19 @@ button {
   color: #16a34a;
   font-size: 24px;
   line-height: 1.1;
+}
+
+.execution-large {
+  display: block;
+  margin-top: 8px;
+  color: #1677ff;
+  font-size: 24px;
+  line-height: 1.1;
+  font-weight: 800;
+}
+
+.metric-label-spaced {
+  margin-top: 22px;
 }
 
 .confirm-warning {
@@ -1164,10 +1202,14 @@ button {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .upload-drop-zone {
+  .source-path-zone {
     min-height: 210px;
     padding: 20px;
     text-align: center;
+  }
+
+  .source-path-form {
+    grid-template-columns: 1fr;
   }
 
   .detail-fields div,
